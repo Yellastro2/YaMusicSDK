@@ -137,9 +137,7 @@ internal class RotorApi(
             )
             trackId?.let { put("trackId", it) }
             from?.let { put("from", it) }
-            totalPlayedSeconds
-                ?.takeIf { it != 0f }
-                ?.let { put("totalPlayedSeconds", it) }
+            totalPlayedSeconds?.let { put("totalPlayedSeconds", it) }
         }
         val feedbackBody = YamHttpBody.Json(body.toString())
         val firstResult = sendFeedback(station, feedbackBody, batchId)

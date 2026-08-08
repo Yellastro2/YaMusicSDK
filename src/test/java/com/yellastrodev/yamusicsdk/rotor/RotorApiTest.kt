@@ -109,6 +109,31 @@ class RotorApiTest {
     }
 
     @Test
+    fun feedbackIncludesZeroPlayedSeconds() = runBlocking {
+        val transport = FakeTransport(
+            YamResult.Success(YamHttpResponse(200, """{"result":"ok"}"""))
+        )
+
+        RotorApi(
+            transport = transport,
+            timestampSeconds = { 123.5 }
+        ).feedback(
+            station = "user:onyourwave",
+            type = RotorFeedbackType.SKIP,
+            trackId = "10",
+            totalPlayedSeconds = 0f,
+            batchId = "batch-1"
+        )
+
+        assertEquals(
+            YamHttpBody.Json(
+                """{"type":"skip","timestamp":123.5,"trackId":"10","totalPlayedSeconds":0.0}"""
+            ),
+            transport.lastRequest?.body
+        )
+    }
+
+    @Test
     fun feedbackTimestampNeverUsesScientificNotation() = runBlocking {
         val transport = FakeTransport(
             YamResult.Success(YamHttpResponse(200, """{"result":"ok"}"""))
