@@ -1,6 +1,6 @@
-# yandexmusiclib
+# YaMusicSDK
 
-`yandexmusiclib` — самостоятельная Kotlin-JRE-библиотека для работы с API
+`YaMusicSDK` — самостоятельная Kotlin-JRE-библиотека для работы с API
 Яндекс Музыки, созданная на основе знаний и контрактов, собранных в
 [MarshalX/yandex-music-api](https://github.com/MarshalX/yandex-music-api).
 
@@ -14,7 +14,7 @@
 
 ## Концепция модуля
 
-`yandexmusiclib` не является переводом Python-библиотеки на Kotlin и не
+`YaMusicSDK` не является переводом Python-библиотеки на Kotlin и не
 стремится построчно или структурно повторять её код.
 
 Оригинальная SDK используется как проверенная основа знаний об API: источник
@@ -40,7 +40,7 @@ endpoint-адресов, параметров запросов, моделей �
 
 Для анализа поведения API рядом с проектом используется локальный клон
 оригинального репозитория. Путь к нему задаётся в файле
-`yandexmusiclib/local.properties`:
+`YaMusicSDK/local.properties`:
 
 ```properties
 LOCAL_CLONE=C\:\\path\\to\\yandex-music-api
