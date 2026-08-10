@@ -12,6 +12,24 @@
 > стабильным контрактом, поэтому отдельные методы и модели могут перестать
 > работать после изменений на стороне сервиса.
 
+## Требования и сборка
+
+- JDK 17 или новее для запуска Gradle 9.1;
+- целевая версия библиотеки — JVM 11;
+- установленный Gradle 9.1, пока репозиторий не содержит собственного Gradle Wrapper.
+
+Клонирование и проверка отдельного репозитория:
+
+```powershell
+git clone https://github.com/Yellastro2/YaMusicSDK.git
+cd YaMusicSDK
+gradle test
+gradle build
+```
+
+Библиотека пока не публикуется в Maven-репозитории. В приложении `Движ` она
+подключается из исходников как Gradle-модуль `:yaMusicSdk`.
+
 ## Возможности
 
 - **Авторизация** — OAuth Device Flow, получение access/refresh token, обновление и очистка авторизации клиента.
@@ -30,7 +48,15 @@
 Для авторизации доступен OAuth Device Flow:
 
 ```kotlin
-val result = YandexDeviceAuth().authorize { code ->
+val logger = NoOpYamLogger
+
+val auth = YandexDeviceAuth(
+    clientId = oauthClientId,
+    clientSecret = oauthClientSecret,
+    logger = logger
+)
+
+val result = auth.authorize { code ->
     println("Откройте ${code.verificationUrl} и введите ${code.userCode}")
 }
 
@@ -58,6 +84,16 @@ when (result) {
 ## Клиент API
 
 Основные операции выполняются через `YamApiClient`.
+
+Клиент создаётся с сохранённым access token и идентификатором пользователя:
+
+```kotlin
+val client = YamApiClient(
+    accessToken = accessToken,
+    userId = userId,
+    logger = NoOpYamLogger
+)
+```
 
 Сетевые методы возвращают типизированный `YamResult<T>`:
 
