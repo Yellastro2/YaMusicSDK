@@ -8,11 +8,15 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 import java.net.ConnectException
-import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
-import java.net.URL
+import java.net.URI
 import java.net.URLEncoder
 import java.net.UnknownHostException
 import java.nio.charset.StandardCharsets
@@ -52,15 +56,37 @@ internal fun interface YamContentTransport {
 }
 
 /**
- * Внутренний HTTP transport. Логирует только метод, путь, статус и время без тела и токена.
+ * Внутренний OkHttp transport. Логирует только метод, путь, статус и время без тела и токена.
  */
 internal class YamHttpTransport(
     private val accessToken: () -> String,
     private val baseUrl: String = DEFAULT_BASE_URL,
     private val connectTimeoutMillis: Int = 10_000,
     private val readTimeoutMillis: Int = 15_000,
+    connectionFactory: YamConnectionFactory = YamConnectionFactory(),
     private val logger: YamLogger
 ) : YamTransport, YamContentTransport {
+
+    @Volatile
+    private var clients =
+        connectionFactory.createClients(
+            connectTimeoutMillis = connectTimeoutMillis,
+            readTimeoutMillis = readTimeoutMillis,
+        )
+
+    /** Новые запросы будут выполняться через обновлённую конфигурацию прокси. */
+    fun updateProxyConfig(
+        proxyConfig: YamProxyConfig?,
+    ) {
+        clients =
+            YamConnectionFactory(
+                proxyConfig,
+                logger,
+            ).createClients(
+                connectTimeoutMillis = connectTimeoutMillis,
+                readTimeoutMillis = readTimeoutMillis,
+            )
+    }
 
     override suspend fun execute(
         request: YamHttpRequest
@@ -78,27 +104,34 @@ internal class YamHttpTransport(
         logger.debug(TAG, "[execute] Начат запрос ${request.method} ${request.path}")
 
         try {
-            val connection = openConnection(request)
-            try {
-                configureConnection(connection, request, token)
-                writeBody(connection, request.body)
-
-                val statusCode = connection.responseCode
-                val responseBody = readResponseBody(connection, statusCode)
-                val elapsedMs = (System.nanoTime() - startedAt) / NANOS_IN_MILLISECOND
-                logger.debug(
-                    TAG,
-                    "[execute] ${request.method} ${request.path}: HTTP $statusCode, ${elapsedMs}мс",
+            clients.regular
+                .newCall(
+                    buildRequest(
+                        request = request,
+                        token = token,
+                    ),
                 )
+                .execute()
+                .use { response ->
+                    val statusCode = response.code
+                    val responseBody = response.body?.string().orEmpty()
+                    val elapsedMs = (System.nanoTime() - startedAt) / NANOS_IN_MILLISECOND
+                    logger.debug(
+                        TAG,
+                        "[execute] ${request.method} ${request.path}: HTTP $statusCode, ${elapsedMs}мс",
+                    )
 
-                if (statusCode in 200..299) {
-                    YamResult.Success(YamHttpResponse(statusCode, responseBody))
-                } else {
-                    YamResult.Failure(mapHttpError(statusCode, responseBody))
+                    if (response.isSuccessful) {
+                        YamResult.Success(
+                            YamHttpResponse(
+                                statusCode = statusCode,
+                                body = responseBody,
+                            ),
+                        )
+                    } else {
+                        YamResult.Failure(mapHttpError(statusCode, responseBody))
+                    }
                 }
-            } finally {
-                connection.disconnect()
-            }
         } catch (error: CancellationException) {
             throw error
         } catch (error: SocketTimeoutException) {
@@ -144,56 +177,26 @@ internal class YamHttpTransport(
         )
 
         try {
-            var currentUrl = URL(url)
+            var currentUrl = URI(url)
             var redirectCount = 0
 
             while (true) {
-                val connection =
-                    currentUrl.openConnection() as HttpURLConnection
+                val response =
+                    clients.manualRedirects
+                        .newCall(
+                            buildContentRequest(
+                                url = currentUrl.toString(),
+                                token = token,
+                                requiresAuthorization = requiresAuthorization,
+                            ),
+                        )
+                        .execute()
 
                 try {
-                    // Обрабатываем редиректы сами:
-                    // OpenJDK HttpURLConnection не умеет HTTP 308.
-                    connection.instanceFollowRedirects = false
+                    val statusCode = response.code
 
-                    connection.requestMethod =
-                        YamHttpMethod.GET.name
-
-                    connection.connectTimeout =
-                        connectTimeoutMillis
-
-                    connection.readTimeout =
-                        readTimeoutMillis
-
-                    connection.setRequestProperty(
-                        "Accept",
-                        "*/*",
-                    )
-
-                    connection.setRequestProperty(
-                        "User-Agent",
-                        USER_AGENT,
-                    )
-
-                    if (requiresAuthorization) {
-                        connection.setRequestProperty(
-                            "Authorization",
-                            "OAuth $token",
-                        )
-                    }
-
-                    val statusCode =
-                        connection.responseCode
-
-                    if (
-                        statusCode == HttpURLConnection.HTTP_MOVED_PERM ||
-                        statusCode == HttpURLConnection.HTTP_MOVED_TEMP ||
-                        statusCode == HttpURLConnection.HTTP_SEE_OTHER ||
-                        statusCode == HTTP_TEMPORARY_REDIRECT ||
-                        statusCode == HTTP_PERMANENT_REDIRECT
-                    ) {
-                        val location =
-                            connection.getHeaderField("Location")
+                    if (statusCode in REDIRECT_STATUS_CODES) {
+                        val location = response.header("Location")
 
                         if (location.isNullOrBlank()) {
                             return@withContext YamResult.Failure(
@@ -222,51 +225,35 @@ internal class YamHttpTransport(
                             "[retrieve] GET $logPath: HTTP $statusCode, redirect=$redirectCount",
                         )
 
-                        // Работает и для абсолютного, и для относительного Location.
-                        currentUrl =
-                            URL(
-                                currentUrl,
-                                location,
-                            )
-
+                        currentUrl = currentUrl.resolve(location)
                         continue
                     }
 
                     val elapsedMs =
                         (System.nanoTime() - startedAt) /
-                                NANOS_IN_MILLISECOND
+                            NANOS_IN_MILLISECOND
 
                     logger.debug(
                         TAG,
                         "[retrieve] GET $logPath: HTTP $statusCode, ${elapsedMs}мс",
                     )
 
-                    if (statusCode in 200..299) {
+                    val responseBody = response.body
+
+                    if (response.isSuccessful) {
                         return@withContext YamResult.Success(
-                            connection.inputStream.use {
-                                it.readBytes()
-                            },
+                            responseBody?.bytes() ?: ByteArray(0),
                         )
                     }
-
-                    val errorBody =
-                        connection.errorStream
-                            ?.bufferedReader(
-                                StandardCharsets.UTF_8,
-                            )
-                            ?.use {
-                                it.readText()
-                            }
-                            .orEmpty()
 
                     return@withContext YamResult.Failure(
                         mapHttpError(
                             statusCode,
-                            errorBody,
+                            responseBody?.string().orEmpty(),
                         ),
                     )
                 } finally {
-                    connection.disconnect()
+                    response.close()
                 }
             }
 
@@ -333,7 +320,47 @@ internal class YamHttpTransport(
         }
     }
 
-    private fun openConnection(request: YamHttpRequest): HttpURLConnection {
+    private fun buildRequest(
+        request: YamHttpRequest,
+        token: String,
+    ): Request {
+        val builder =
+            Request.Builder()
+                .url(buildUrl(request))
+                .header("Accept", "application/json")
+                .header("User-Agent", USER_AGENT)
+                .header("X-Yandex-Music-Client", YANDEX_MUSIC_CLIENT)
+
+        if (request.requiresAuthorization) {
+            builder.header("Authorization", "OAuth $token")
+        }
+
+        return when (request.method) {
+            YamHttpMethod.GET -> builder.get()
+            YamHttpMethod.POST -> builder.post(request.body.toRequestBody())
+        }.build()
+    }
+
+    private fun buildContentRequest(
+        url: String,
+        token: String,
+        requiresAuthorization: Boolean,
+    ): Request {
+        val builder =
+            Request.Builder()
+                .url(url)
+                .get()
+                .header("Accept", "*/*")
+                .header("User-Agent", USER_AGENT)
+
+        if (requiresAuthorization) {
+            builder.header("Authorization", "OAuth $token")
+        }
+
+        return builder.build()
+    }
+
+    private fun buildUrl(request: YamHttpRequest): String {
         val normalizedPath = if (request.path.startsWith("/")) {
             request.path
         } else {
@@ -347,74 +374,23 @@ internal class YamHttpTransport(
             }
             ?.let { "?$it" }
             .orEmpty()
-        return URL("$baseUrl$normalizedPath$query").openConnection() as HttpURLConnection
+        return "$baseUrl$normalizedPath$query"
     }
 
-    private fun configureConnection(
-        connection: HttpURLConnection,
-        request: YamHttpRequest,
-        token: String
-    ) {
-        connection.requestMethod = request.method.name
-        connection.connectTimeout = connectTimeoutMillis
-        connection.readTimeout = readTimeoutMillis
-        connection.setRequestProperty("Accept", "application/json")
-        connection.setRequestProperty("User-Agent", USER_AGENT)
-        connection.setRequestProperty("X-Yandex-Music-Client", YANDEX_MUSIC_CLIENT)
-        if (request.requiresAuthorization) {
-            connection.setRequestProperty("Authorization", "OAuth $token")
+    private fun YamHttpBody?.toRequestBody(): RequestBody =
+        when (this) {
+            is YamHttpBody.Form ->
+                fields.entries
+                    .joinToString("&") { (key, value) ->
+                        "${key.urlEncoded()}=${value.urlEncoded()}"
+                    }
+                    .toRequestBody(FORM_MEDIA_TYPE)
+            is YamHttpBody.Json -> value.toRequestBody(JSON_MEDIA_TYPE)
+            null -> ByteArray(0).toRequestBody(null)
         }
-        when (request.body) {
-            is YamHttpBody.Form -> {
-                connection.doOutput = true
-                connection.setRequestProperty(
-                    "Content-Type",
-                    "application/x-www-form-urlencoded"
-                )
-            }
-            is YamHttpBody.Json -> {
-                connection.doOutput = true
-                connection.setRequestProperty(
-                    "Content-Type",
-                    "application/json"
-                )
-            }
-            null -> Unit
-        }
-    }
-
-    private fun writeBody(connection: HttpURLConnection, body: YamHttpBody?) {
-        val requestBody = when (body) {
-            is YamHttpBody.Form -> body.fields.entries.joinToString("&") { (key, value) ->
-                "${key.urlEncoded()}=${value.urlEncoded()}"
-            }
-            is YamHttpBody.Json -> body.value
-            null -> return
-        }
-        connection.outputStream.bufferedWriter(StandardCharsets.UTF_8).use { writer ->
-            writer.write(requestBody)
-        }
-    }
-
-    private fun readResponseBody(
-        connection: HttpURLConnection,
-        statusCode: Int
-    ): String {
-        val stream = if (statusCode in 200..299) {
-            connection.inputStream
-        } else {
-            connection.errorStream
-        }
-        return stream
-            ?.bufferedReader(StandardCharsets.UTF_8)
-            ?.use { it.readText() }
-            .orEmpty()
-    }
 
     private fun mapHttpError(statusCode: Int, body: String): YamError {
-        if (statusCode == HttpURLConnection.HTTP_UNAUTHORIZED ||
-            statusCode == HttpURLConnection.HTTP_FORBIDDEN
-        ) {
+        if (statusCode == HTTP_UNAUTHORIZED || statusCode == HTTP_FORBIDDEN) {
             return YamError.Unauthorized
         }
 
@@ -435,9 +411,9 @@ internal class YamHttpTransport(
             }.getOrNull() ?: runCatching {
                 errorElement?.jsonObject?.get("name")?.jsonPrimitive?.contentOrNull
             }.getOrNull()
-        val description = root["errorDescription"]?.jsonPrimitive?.contentOrNull
-            ?: root["error_description"]?.jsonPrimitive?.contentOrNull
-            ?: root["message"]?.jsonPrimitive?.contentOrNull
+            val description = root["errorDescription"]?.jsonPrimitive?.contentOrNull
+                ?: root["error_description"]?.jsonPrimitive?.contentOrNull
+                ?: root["message"]?.jsonPrimitive?.contentOrNull
                 ?: runCatching {
                     errorElement?.jsonObject?.get("message")?.jsonPrimitive?.contentOrNull
                 }.getOrNull()
@@ -456,9 +432,15 @@ internal class YamHttpTransport(
         const val USER_AGENT = "Yandex-Music-API"
         const val YANDEX_MUSIC_CLIENT = "YandexMusicAndroid/24023621"
         const val NANOS_IN_MILLISECOND = 1_000_000L
-        val json = Json { ignoreUnknownKeys = true }
-        const val HTTP_TEMPORARY_REDIRECT = 307
-        const val HTTP_PERMANENT_REDIRECT = 308
+        const val HTTP_UNAUTHORIZED = 401
+        const val HTTP_FORBIDDEN = 403
         const val MAX_REDIRECTS = 8
+        val FORM_MEDIA_TYPE =
+            "application/x-www-form-urlencoded".toMediaType()
+        val JSON_MEDIA_TYPE =
+            "application/json".toMediaType()
+        val REDIRECT_STATUS_CODES =
+            setOf(301, 302, 303, 307, 308)
+        val json = Json { ignoreUnknownKeys = true }
     }
 }

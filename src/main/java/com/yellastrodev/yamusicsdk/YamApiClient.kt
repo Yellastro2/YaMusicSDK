@@ -11,7 +11,9 @@ import com.yellastrodev.yamusicsdk.entities.YaPlaylist
 import com.yellastrodev.yamusicsdk.entities.YaTrack
 import com.yellastrodev.yamusicsdk.likes.LikeActionResult
 import com.yellastrodev.yamusicsdk.likes.LikesApi
+import com.yellastrodev.yamusicsdk.network.YamConnectionFactory
 import com.yellastrodev.yamusicsdk.network.YamHttpTransport
+import com.yellastrodev.yamusicsdk.network.YamProxyConfig
 import com.yellastrodev.yamusicsdk.network.YamResult
 import com.yellastrodev.yamusicsdk.playlists.PlaylistApi
 import com.yellastrodev.yamusicsdk.playlists.PlaylistDetails
@@ -35,7 +37,8 @@ class YamApiClient(
     accessToken: String,
     userId: String,
     login: String = "",
-    val logger: YamLogger
+    val logger: YamLogger = NoOpYamLogger,
+    proxyConfig: YamProxyConfig? = null,
 ) {
     @Volatile
     private var accessToken: String = accessToken
@@ -51,6 +54,10 @@ class YamApiClient(
     private val httpTransport by lazy {
         YamHttpTransport(
             accessToken = { this@YamApiClient.accessToken },
+            connectionFactory = YamConnectionFactory(
+                proxyConfig,
+                logger,
+            ),
             logger = logger,
         )
     }
@@ -64,6 +71,23 @@ class YamApiClient(
         DownloadApi(httpTransport, httpTransport)
     }
     private val coverApi by lazy { CoverApi(httpTransport) }
+
+    /**
+     * Применяет прокси ко всем новым API-, content- и redirect-соединениям клиента.
+     * Уже открытое соединение продолжает работу с прежней конфигурацией.
+     */
+    fun updateProxyConfig(
+        proxyConfig: YamProxyConfig?,
+    ) {
+        httpTransport.updateProxyConfig(
+            proxyConfig,
+        )
+
+        logger.info(
+            TAG,
+            "[updateProxyConfig] Конфигурация прокси обновлена",
+        )
+    }
 
     fun updateAuthorization(
         token: String,

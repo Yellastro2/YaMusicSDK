@@ -1,6 +1,8 @@
 package com.yellastrodev.yamusicsdk.auth
 
 import com.yellastrodev.yamusicsdk.YamLogger
+import com.yellastrodev.yamusicsdk.network.YamConnectionFactory
+import com.yellastrodev.yamusicsdk.network.YamProxyConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -44,12 +46,18 @@ class YandexDeviceAuth internal constructor(
         clientSecret: String,
         logger: YamLogger,
         deviceName: String = DEFAULT_DEVICE_NAME,
+        proxyConfig: YamProxyConfig? = null,
     ) : this(
         clientId = clientId,
         clientSecret = clientSecret,
         deviceName = deviceName,
         logger = logger,
-        transport = HttpUrlConnectionDeviceAuthTransport(),
+        transport = OkHttpDeviceAuthTransport(
+            connectionFactory = YamConnectionFactory(
+                proxyConfig,
+                logger,
+            ),
+        ),
         nowMillis = { System.nanoTime() / NANOS_IN_MILLISECOND },
         delayMillis = { delay(it) },
         deviceIdFactory = { randomDeviceId() },
