@@ -23,14 +23,15 @@ internal class OkHttpDeviceAuthTransport(
     private val connectTimeoutMillis: Int = 10_000,
     private val readTimeoutMillis: Int = 15_000,
     connectionFactory: YamConnectionFactory = YamConnectionFactory(),
-) : DeviceAuthTransport {
+) : DeviceAuthTransport, AutoCloseable {
 
-    private val client =
-        connectionFactory.createClient(
+    private val clients =
+        connectionFactory.createClients(
             connectTimeoutMillis = connectTimeoutMillis,
             readTimeoutMillis = readTimeoutMillis,
-            followRedirects = true,
         )
+
+    private val client = clients.regular
 
     override suspend fun postForm(
         url: String,
@@ -64,6 +65,10 @@ internal class OkHttpDeviceAuthTransport(
                     body = response.body?.string().orEmpty(),
                 )
             }
+    }
+
+    override fun close() {
+        clients.close()
     }
 
     private fun String.urlEncoded(): String =

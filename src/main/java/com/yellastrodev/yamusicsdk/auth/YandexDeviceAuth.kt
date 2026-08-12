@@ -39,7 +39,7 @@ class YandexDeviceAuth internal constructor(
     private val nowMillis: () -> Long,
     private val delayMillis: suspend (Long) -> Unit,
     private val deviceIdFactory: () -> String,
-) {
+) : AutoCloseable {
 
     constructor(
         clientId: String,
@@ -285,6 +285,11 @@ class YandexDeviceAuth internal constructor(
         val error = IllegalArgumentException(message)
         logger.error(TAG,"[validate] $message", error)
         return DeviceAuthResult.Failure(DeviceAuthError.InvalidResponse(error))
+    }
+
+    /** Освобождает сетевые ресурсы OAuth и регистрацию SOCKS5-аутентификации. */
+    override fun close() {
+        (transport as? AutoCloseable)?.close()
     }
 
     @Serializable

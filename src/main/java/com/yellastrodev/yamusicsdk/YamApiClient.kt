@@ -39,7 +39,7 @@ class YamApiClient(
     login: String = "",
     val logger: YamLogger = NoOpYamLogger,
     proxyConfig: YamProxyConfig? = null,
-) {
+) : AutoCloseable {
     @Volatile
     private var accessToken: String = accessToken
 
@@ -51,7 +51,7 @@ class YamApiClient(
     var login: String = login
         private set
 
-    private val httpTransport by lazy {
+    private val httpTransportDelegate = lazy {
         YamHttpTransport(
             accessToken = { this@YamApiClient.accessToken },
             connectionFactory = YamConnectionFactory(
@@ -61,6 +61,7 @@ class YamApiClient(
             logger = logger,
         )
     }
+    private val httpTransport by httpTransportDelegate
     private val accountApi by lazy { AccountApi(httpTransport) }
     private val likesApi by lazy { LikesApi(httpTransport) }
     private val playlistApi by lazy { PlaylistApi(httpTransport) }
@@ -321,6 +322,13 @@ class YamApiClient(
         uri: String,
         size: CoverSize
     ): YamResult<ByteArray> = coverApi.bytes(uri, size)
+
+    /** Освобождает сетевые ресурсы и регистрацию SOCKS5-аутентификации клиента. */
+    override fun close() {
+        if (httpTransportDelegate.isInitialized()) {
+            httpTransport.close()
+        }
+    }
 
     private companion object {
         const val TAG = "YamApiClient"

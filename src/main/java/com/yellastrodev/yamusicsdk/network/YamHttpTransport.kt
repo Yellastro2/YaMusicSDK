@@ -65,7 +65,7 @@ internal class YamHttpTransport(
     private val readTimeoutMillis: Int = 15_000,
     connectionFactory: YamConnectionFactory = YamConnectionFactory(),
     private val logger: YamLogger
-) : YamTransport, YamContentTransport {
+) : YamTransport, YamContentTransport, AutoCloseable {
 
     @Volatile
     private var clients =
@@ -78,7 +78,7 @@ internal class YamHttpTransport(
     fun updateProxyConfig(
         proxyConfig: YamProxyConfig?,
     ) {
-        clients =
+        val updatedClients =
             YamConnectionFactory(
                 proxyConfig,
                 logger,
@@ -86,6 +86,14 @@ internal class YamHttpTransport(
                 connectTimeoutMillis = connectTimeoutMillis,
                 readTimeoutMillis = readTimeoutMillis,
             )
+        val previousClients = clients
+        clients = updatedClients
+        previousClients.close()
+    }
+
+    /** Освобождает connection pools и регистрацию SOCKS5-аутентификации. */
+    override fun close() {
+        clients.close()
     }
 
     override suspend fun execute(
@@ -104,34 +112,45 @@ internal class YamHttpTransport(
         logger.debug(TAG, "[execute] Начат запрос ${request.method} ${request.path}")
 
         try {
-            clients.regular
-                .newCall(
-                    buildRequest(
-                        request = request,
-                        token = token,
-                    ),
-                )
-                .execute()
-                .use { response ->
-                    val statusCode = response.code
-                    val responseBody = response.body?.string().orEmpty()
-                    val elapsedMs = (System.nanoTime() - startedAt) / NANOS_IN_MILLISECOND
-                    logger.debug(
+            retryOnceOnConnectTimeout(
+                shouldRetry = request.method == YamHttpMethod.GET,
+                onRetry = {
+                    logger.warning(
                         TAG,
-                        "[execute] ${request.method} ${request.path}: HTTP $statusCode, ${elapsedMs}мс",
+                        "[execute] ${request.method} ${request.path}: " +
+                            "таймаут подключения, повтор 1/1",
                     )
-
-                    if (response.isSuccessful) {
-                        YamResult.Success(
-                            YamHttpResponse(
-                                statusCode = statusCode,
-                                body = responseBody,
-                            ),
+                },
+            ) {
+                clients.regular
+                    .newCall(
+                        buildRequest(
+                            request = request,
+                            token = token,
+                        ),
+                    )
+                    .execute()
+                    .use { response ->
+                        val statusCode = response.code
+                        val responseBody = response.body?.string().orEmpty()
+                        val elapsedMs = (System.nanoTime() - startedAt) / NANOS_IN_MILLISECOND
+                        logger.debug(
+                            TAG,
+                            "[execute] ${request.method} ${request.path}: HTTP $statusCode, ${elapsedMs}мс",
                         )
-                    } else {
-                        YamResult.Failure(mapHttpError(statusCode, responseBody))
+
+                        if (response.isSuccessful) {
+                            YamResult.Success(
+                                YamHttpResponse(
+                                    statusCode = statusCode,
+                                    body = responseBody,
+                                ),
+                            )
+                        } else {
+                            YamResult.Failure(mapHttpError(statusCode, responseBody))
+                        }
                     }
-                }
+            }
         } catch (error: CancellationException) {
             throw error
         } catch (error: SocketTimeoutException) {
@@ -177,94 +196,22 @@ internal class YamHttpTransport(
         )
 
         try {
-            var currentUrl = URI(url)
-            var redirectCount = 0
-
-            while (true) {
-                val response =
-                    clients.manualRedirects
-                        .newCall(
-                            buildContentRequest(
-                                url = currentUrl.toString(),
-                                token = token,
-                                requiresAuthorization = requiresAuthorization,
-                            ),
-                        )
-                        .execute()
-
-                try {
-                    val statusCode = response.code
-
-                    if (statusCode in REDIRECT_STATUS_CODES) {
-                        val location = response.header("Location")
-
-                        if (location.isNullOrBlank()) {
-                            return@withContext YamResult.Failure(
-                                YamError.InvalidResponse(
-                                    IllegalStateException(
-                                        "HTTP $statusCode без Location",
-                                    ),
-                                ),
-                            )
-                        }
-
-                        redirectCount++
-
-                        if (redirectCount > MAX_REDIRECTS) {
-                            return@withContext YamResult.Failure(
-                                YamError.InvalidResponse(
-                                    IllegalStateException(
-                                        "Слишком много HTTP redirects",
-                                    ),
-                                ),
-                            )
-                        }
-
-                        logger.debug(
-                            TAG,
-                            "[retrieve] GET $logPath: HTTP $statusCode, redirect=$redirectCount",
-                        )
-
-                        currentUrl = currentUrl.resolve(location)
-                        continue
-                    }
-
-                    val elapsedMs =
-                        (System.nanoTime() - startedAt) /
-                            NANOS_IN_MILLISECOND
-
-                    logger.debug(
+            retryOnceOnConnectTimeout(
+                onRetry = {
+                    logger.warning(
                         TAG,
-                        "[retrieve] GET $logPath: HTTP $statusCode, ${elapsedMs}мс",
+                        "[retrieve] GET $logPath: таймаут подключения, повтор 1/1",
                     )
-
-                    val responseBody = response.body
-
-                    if (response.isSuccessful) {
-                        return@withContext YamResult.Success(
-                            responseBody?.bytes() ?: ByteArray(0),
-                        )
-                    }
-
-                    return@withContext YamResult.Failure(
-                        mapHttpError(
-                            statusCode,
-                            responseBody?.string().orEmpty(),
-                        ),
-                    )
-                } finally {
-                    response.close()
-                }
+                },
+            ) {
+                retrieveContentOnce(
+                    url = url,
+                    token = token,
+                    requiresAuthorization = requiresAuthorization,
+                    logPath = logPath,
+                    startedAt = startedAt,
+                )
             }
-
-            @Suppress("UNREACHABLE_CODE")
-            YamResult.Failure(
-                YamError.InvalidResponse(
-                    IllegalStateException(
-                        "Недостижимое состояние",
-                    ),
-                ),
-            )
         } catch (error: CancellationException) {
             throw error
         } catch (error: SocketTimeoutException) {
@@ -317,6 +264,100 @@ internal class YamHttpTransport(
             YamResult.Failure(
                 YamError.Network(error),
             )
+        }
+    }
+
+    private fun retrieveContentOnce(
+        url: String,
+        token: String,
+        requiresAuthorization: Boolean,
+        logPath: String,
+        startedAt: Long,
+    ): YamResult<ByteArray> {
+        var currentUrl = URI(url)
+        var redirectCount = 0
+
+        while (true) {
+            val response =
+                clients.manualRedirects
+                    .newCall(
+                        buildContentRequest(
+                            url = currentUrl.toString(),
+                            token = token,
+                            requiresAuthorization = requiresAuthorization,
+                        ),
+                    )
+                    .execute()
+
+            try {
+                val statusCode = response.code
+
+                if (statusCode in REDIRECT_STATUS_CODES) {
+                    val location = response.header("Location")
+
+                    if (location.isNullOrBlank()) {
+                        return YamResult.Failure(
+                            YamError.InvalidResponse(
+                                IllegalStateException(
+                                    "HTTP $statusCode без Location",
+                                ),
+                            ),
+                        )
+                    }
+
+                    redirectCount++
+
+                    if (redirectCount > MAX_REDIRECTS) {
+                        return YamResult.Failure(
+                            YamError.InvalidResponse(
+                                IllegalStateException(
+                                    "Слишком много HTTP redirects",
+                                ),
+                            ),
+                        )
+                    }
+
+                    logger.debug(
+                        TAG,
+                        "[retrieve] GET $logPath: HTTP $statusCode, redirect=$redirectCount",
+                    )
+
+                    currentUrl = currentUrl.resolve(location)
+                    continue
+                }
+
+                val responseBody = response.body
+
+                if (response.isSuccessful) {
+                    val elapsedMs =
+                        (System.nanoTime() - startedAt) /
+                            NANOS_IN_MILLISECOND
+                    logger.debug(
+                        TAG,
+                        "[retrieve] GET $logPath: HTTP $statusCode, ${elapsedMs}мс",
+                    )
+                    return YamResult.Success(
+                        responseBody?.bytes() ?: ByteArray(0),
+                    )
+                }
+
+                val elapsedMs =
+                    (System.nanoTime() - startedAt) /
+                        NANOS_IN_MILLISECOND
+                logger.debug(
+                    TAG,
+                    "[retrieve] GET $logPath: HTTP $statusCode, ${elapsedMs}мс",
+                )
+
+                return YamResult.Failure(
+                    mapHttpError(
+                        statusCode,
+                        responseBody?.string().orEmpty(),
+                    ),
+                )
+            } finally {
+                response.close()
+            }
         }
     }
 
@@ -444,3 +485,48 @@ internal class YamHttpTransport(
         val json = Json { ignoreUnknownKeys = true }
     }
 }
+
+/** Повторяет разрешённую вызывающим кодом операцию ровно один раз после connect timeout. */
+internal inline fun <T> retryOnceOnConnectTimeout(
+    shouldRetry: Boolean = true,
+    onRetry: (SocketTimeoutException) -> Unit,
+    block: () -> T,
+): T {
+    var retryAvailable = true
+
+    while (true) {
+        try {
+            return block()
+        } catch (error: IOException) {
+            val connectTimeout = error.connectTimeoutCauseOrNull()
+            if (!shouldRetry || !retryAvailable || connectTimeout == null) {
+                throw error
+            }
+            retryAvailable = false
+            onRetry(connectTimeout)
+        }
+    }
+}
+
+internal fun IOException.connectTimeoutCauseOrNull(): SocketTimeoutException? {
+    var current: Throwable? = this
+    while (current != null) {
+        if (
+            current is SocketTimeoutException &&
+            current.isConnectTimeout()
+        ) {
+            return current
+        }
+        current = current.cause
+    }
+    return null
+}
+
+private fun SocketTimeoutException.isConnectTimeout(): Boolean =
+    message?.contains(
+        other = "connect",
+        ignoreCase = true,
+    ) == true ||
+        stackTrace.any { frame ->
+            frame.methodName == "timedFinishConnect"
+        }

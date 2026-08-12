@@ -48,12 +48,12 @@ class YamConnectionFactoryTest {
                 ),
             )
 
-        val client =
-            factory.createClient(
+        val clients =
+            factory.createClients(
                 connectTimeoutMillis = 10_000,
                 readTimeoutMillis = 15_000,
-                followRedirects = true,
             )
+        val client = clients.regular
 
         val challenge =
             Response.Builder()
@@ -71,34 +71,38 @@ class YamConnectionFactoryTest {
                 )
                 .build()
 
-        val authenticatedRequest =
-            client.proxyAuthenticator.authenticate(
-                null,
-                challenge,
+        try {
+            val authenticatedRequest =
+                client.proxyAuthenticator.authenticate(
+                    null,
+                    challenge,
+                )
+
+            assertEquals(
+                Credentials.basic(
+                    "user",
+                    ",password",
+                ),
+                authenticatedRequest?.header(
+                    "Proxy-Authorization",
+                ),
             )
 
-        assertEquals(
-            Credentials.basic(
-                "user",
-                ",password",
-            ),
-            authenticatedRequest?.header(
-                "Proxy-Authorization",
-            ),
-        )
+            val repeatedChallenge =
+                challenge
+                    .newBuilder()
+                    .request(authenticatedRequest!!)
+                    .build()
 
-        val repeatedChallenge =
-            challenge
-                .newBuilder()
-                .request(authenticatedRequest!!)
-                .build()
-
-        assertNull(
-            client.proxyAuthenticator.authenticate(
-                null,
-                repeatedChallenge,
-            ),
-        )
+            assertNull(
+                client.proxyAuthenticator.authenticate(
+                    null,
+                    repeatedChallenge,
+                ),
+            )
+        } finally {
+            clients.close()
+        }
     }
 
     @Test
@@ -107,6 +111,35 @@ class YamConnectionFactoryTest {
             YamProxyConfig(
                 host = "proxy.example",
                 port = 0,
+            )
+        }
+    }
+
+    @Test
+    fun `SOCKS конфигурация создаёт SOCKS proxy`() {
+        val factory = YamConnectionFactory(
+            YamProxyConfig(
+                host = "socks.example",
+                port = 1_080,
+                type = YamProxyType.SOCKS,
+            ),
+        )
+
+        assertEquals(Proxy.Type.SOCKS, factory.proxy?.type())
+        assertEquals(
+            InetSocketAddress.createUnresolved("socks.example", 1_080),
+            factory.proxy?.address(),
+        )
+    }
+
+    @Test
+    fun `SOCKS credentials должны содержать логин и пароль`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            YamProxyConfig(
+                host = "socks.example",
+                port = 1_080,
+                type = YamProxyType.SOCKS,
+                username = "user",
             )
         }
     }
