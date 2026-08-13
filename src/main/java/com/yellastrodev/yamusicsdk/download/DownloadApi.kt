@@ -9,6 +9,7 @@ import com.yellastrodev.yamusicsdk.network.YamResult
 import com.yellastrodev.yamusicsdk.network.YamTransport
 import kotlinx.serialization.builtins.ListSerializer
 import org.xml.sax.InputSource
+import java.io.OutputStream
 import java.io.StringReader
 import java.security.MessageDigest
 import javax.xml.parsers.DocumentBuilderFactory
@@ -61,6 +62,22 @@ internal class DownloadApi(
             is YamResult.Success -> contentTransport.retrieve(
                 url = urlResult.value,
                 requiresAuthorization = false
+            )
+            is YamResult.Failure -> urlResult
+        }
+
+    /** Загружает mp3 напрямую в переданный поток без удержания файла целиком в памяти. */
+    suspend fun downloadTo(
+        trackId: String,
+        output: OutputStream,
+        onProgress: (downloadedBytes: Long, totalBytes: Long?) -> Unit,
+    ): YamResult<Long> =
+        when (val urlResult = directDownloadUrl(trackId)) {
+            is YamResult.Success -> contentTransport.retrieveTo(
+                url = urlResult.value,
+                requiresAuthorization = false,
+                output = output,
+                onProgress = onProgress,
             )
             is YamResult.Failure -> urlResult
         }

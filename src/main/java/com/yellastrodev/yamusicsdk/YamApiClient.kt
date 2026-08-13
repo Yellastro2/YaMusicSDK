@@ -2,11 +2,15 @@ package com.yellastrodev.yamusicsdk
 
 import com.yellastrodev.yamusicsdk.account.AccountApi
 import com.yellastrodev.yamusicsdk.account.AccountStatus
+import com.yellastrodev.yamusicsdk.albums.AlbumApi
+import com.yellastrodev.yamusicsdk.artists.ArtistApi
+import com.yellastrodev.yamusicsdk.artists.ArtistBriefInfo
 import com.yellastrodev.yamusicsdk.covers.CoverApi
 import com.yellastrodev.yamusicsdk.download.DownloadApi
 import com.yellastrodev.yamusicsdk.download.DownloadInfo
 import com.yellastrodev.yamusicsdk.entities.CoverSize
 import com.yellastrodev.yamusicsdk.entities.YaLikeTracklist
+import com.yellastrodev.yamusicsdk.entities.YaAlbum
 import com.yellastrodev.yamusicsdk.entities.YaPlaylist
 import com.yellastrodev.yamusicsdk.entities.YaTrack
 import com.yellastrodev.yamusicsdk.likes.LikeActionResult
@@ -27,6 +31,7 @@ import com.yellastrodev.yamusicsdk.search.SearchSuggestions
 import com.yellastrodev.yamusicsdk.search.SearchType
 import com.yellastrodev.yamusicsdk.tracks.TrackApi
 import com.yellastrodev.yamusicsdk.tracks.PlayAudioRequest
+import java.io.OutputStream
 
 /**
  * Корутино-ориентированный клиент API Яндекс Музыки для Kotlin/JVM.
@@ -63,6 +68,8 @@ class YamApiClient(
     }
     private val httpTransport by httpTransportDelegate
     private val accountApi by lazy { AccountApi(httpTransport) }
+    private val albumApi by lazy { AlbumApi(httpTransport) }
+    private val artistApi by lazy { ArtistApi(httpTransport) }
     private val likesApi by lazy { LikesApi(httpTransport) }
     private val playlistApi by lazy { PlaylistApi(httpTransport) }
     private val trackApi by lazy { TrackApi(httpTransport) }
@@ -193,6 +200,14 @@ class YamApiClient(
     ): YamResult<List<YaTrack>> =
         trackApi.tracks(trackIds, withPositions)
 
+    /** Возвращает альбом вместе с разбитыми по дискам треками. */
+    suspend fun albumWithTracks(albumId: Int): YamResult<YaAlbum> =
+        albumApi.withTracks(albumId)
+
+    /** Возвращает профиль артиста, его популярные треки и статистику аудитории. */
+    suspend fun artistBriefInfo(artistId: Int): YamResult<ArtistBriefInfo> =
+        artistApi.briefInfo(artistId)
+
     /** Выполняет поиск по Яндекс Музыке и возвращает типизированные известные разделы выдачи. */
     suspend fun search(
         text: String,
@@ -317,6 +332,18 @@ class YamApiClient(
         trackId: String
     ): YamResult<ByteArray> =
         downloadApi.downloadBytes(trackId)
+
+    /** Потоково загружает трек, сохраняя поддержку настроенного ЯМ-прокси. */
+    suspend fun trackDownloadTo(
+        trackId: String,
+        output: OutputStream,
+        onProgress: (downloadedBytes: Long, totalBytes: Long?) -> Unit = { _, _ -> },
+    ): YamResult<Long> =
+        downloadApi.downloadTo(
+            trackId = trackId,
+            output = output,
+            onProgress = onProgress,
+        )
 
     suspend fun coverBytes(
         uri: String,

@@ -3,6 +3,7 @@ package com.yellastrodev.yamusicsdk.network
 import com.yellastrodev.yamusicsdk.YamLogger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.contentOrNull
@@ -13,6 +14,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.OutputStream
 import java.io.IOException
 import java.net.ConnectException
 import java.net.SocketTimeoutException
@@ -53,6 +55,26 @@ internal fun interface YamContentTransport {
         url: String,
         requiresAuthorization: Boolean
     ): YamResult<ByteArray>
+
+    /** Потоково сохраняет внешний контент, сообщая реальный сетевой прогресс. */
+    suspend fun retrieveTo(
+        url: String,
+        requiresAuthorization: Boolean,
+        output: OutputStream,
+        onProgress: (downloadedBytes: Long, totalBytes: Long?) -> Unit,
+    ): YamResult<Long> = when (
+        val result = retrieve(
+            url = url,
+            requiresAuthorization = requiresAuthorization,
+        )
+    ) {
+        is YamResult.Success -> {
+            output.write(result.value)
+            onProgress(result.value.size.toLong(), result.value.size.toLong())
+            YamResult.Success(result.value.size.toLong())
+        }
+        is YamResult.Failure -> result
+    }
 }
 
 /**
@@ -267,6 +289,56 @@ internal class YamHttpTransport(
         }
     }
 
+    override suspend fun retrieveTo(
+        url: String,
+        requiresAuthorization: Boolean,
+        output: OutputStream,
+        onProgress: (downloadedBytes: Long, totalBytes: Long?) -> Unit,
+    ): YamResult<Long> = withContext(Dispatchers.IO) {
+        val logPath = "/external-content"
+        val token = accessToken()
+
+        if (requiresAuthorization && token.isBlank()) {
+            logger.warning(
+                TAG,
+                "[retrieveTo] $logPath: отсутствует авторизация",
+            )
+            return@withContext YamResult.Failure(YamError.Unauthorized)
+        }
+
+        val startedAt = System.nanoTime()
+        logger.debug(TAG, "[retrieveTo] Начат потоковый запрос GET $logPath")
+
+        try {
+            retrieveContentToOnce(
+                url = url,
+                token = token,
+                requiresAuthorization = requiresAuthorization,
+                output = output,
+                onProgress = onProgress,
+                logPath = logPath,
+                startedAt = startedAt,
+            )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: SocketTimeoutException) {
+            logger.error(TAG, "[retrieveTo] GET $logPath: таймаут", error)
+            YamResult.Failure(YamError.Timeout)
+        } catch (error: UnknownHostException) {
+            logger.error(TAG, "[retrieveTo] GET $logPath: нет сети", error)
+            YamResult.Failure(YamError.NoInternet)
+        } catch (error: ConnectException) {
+            logger.error(TAG, "[retrieveTo] GET $logPath: нет соединения", error)
+            YamResult.Failure(YamError.NoInternet)
+        } catch (error: IOException) {
+            logger.error(TAG, "[retrieveTo] GET $logPath: ошибка ввода-вывода", error)
+            YamResult.Failure(YamError.Network(error))
+        } catch (error: Exception) {
+            logger.error(TAG, "[retrieveTo] GET $logPath: сетевая ошибка", error)
+            YamResult.Failure(YamError.Network(error))
+        }
+    }
+
     private fun retrieveContentOnce(
         url: String,
         token: String,
@@ -355,6 +427,94 @@ internal class YamHttpTransport(
                         responseBody?.string().orEmpty(),
                     ),
                 )
+            } finally {
+                response.close()
+            }
+        }
+    }
+
+    private suspend fun retrieveContentToOnce(
+        url: String,
+        token: String,
+        requiresAuthorization: Boolean,
+        output: OutputStream,
+        onProgress: (downloadedBytes: Long, totalBytes: Long?) -> Unit,
+        logPath: String,
+        startedAt: Long,
+    ): YamResult<Long> {
+        var currentUrl = URI(url)
+        var redirectCount = 0
+
+        while (true) {
+            val response = clients.manualRedirects
+                .newCall(
+                    buildContentRequest(
+                        url = currentUrl.toString(),
+                        token = token,
+                        requiresAuthorization = requiresAuthorization,
+                    ),
+                )
+                .execute()
+
+            try {
+                val statusCode = response.code
+
+                if (statusCode in REDIRECT_STATUS_CODES) {
+                    val location = response.header("Location")
+                        ?: return YamResult.Failure(
+                            YamError.InvalidResponse(
+                                IllegalStateException("HTTP $statusCode без Location"),
+                            ),
+                        )
+                    redirectCount++
+                    if (redirectCount > MAX_REDIRECTS) {
+                        return YamResult.Failure(
+                            YamError.InvalidResponse(
+                                IllegalStateException("Слишком много HTTP redirects"),
+                            ),
+                        )
+                    }
+                    currentUrl = currentUrl.resolve(location)
+                    continue
+                }
+
+                val responseBody = response.body
+                if (!response.isSuccessful) {
+                    return YamResult.Failure(
+                        mapHttpError(
+                            statusCode = statusCode,
+                            body = responseBody?.string().orEmpty(),
+                        ),
+                    )
+                }
+
+                val totalBytes = responseBody
+                    ?.contentLength()
+                    ?.takeIf { length -> length >= 0L }
+                var downloadedBytes = 0L
+                onProgress(downloadedBytes, totalBytes)
+
+                responseBody?.byteStream()?.use { input ->
+                    val buffer = ByteArray(CONTENT_BUFFER_SIZE)
+                    while (true) {
+                        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        output.write(buffer, 0, read)
+                        downloadedBytes += read
+                        onProgress(downloadedBytes, totalBytes)
+                    }
+                }
+                output.flush()
+
+                val elapsedMs =
+                    (System.nanoTime() - startedAt) / NANOS_IN_MILLISECOND
+                logger.debug(
+                    TAG,
+                    "[retrieveTo] GET $logPath: HTTP $statusCode, " +
+                        "$downloadedBytes байт, ${elapsedMs}мс",
+                )
+                return YamResult.Success(downloadedBytes)
             } finally {
                 response.close()
             }
@@ -476,6 +636,7 @@ internal class YamHttpTransport(
         const val HTTP_UNAUTHORIZED = 401
         const val HTTP_FORBIDDEN = 403
         const val MAX_REDIRECTS = 8
+        const val CONTENT_BUFFER_SIZE = 64 * 1024
         val FORM_MEDIA_TYPE =
             "application/x-www-form-urlencoded".toMediaType()
         val JSON_MEDIA_TYPE =

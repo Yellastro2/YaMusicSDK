@@ -15,4 +15,8 @@ class YaAlbum(
     @SerialName("ogImage")
     val ogImageUri: String? = null,
     val coverUri: String? = null,
+    val releaseDate: String? = null,
+    val type: String? = null,
+    val description: String? = null,
+    val volumes: List<List<YaTrack>> = emptyList(),
 )

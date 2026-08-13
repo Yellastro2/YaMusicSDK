@@ -12,6 +12,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.ByteArrayOutputStream
 
 class DownloadApiTest {
 
@@ -103,6 +104,42 @@ class DownloadApiTest {
             transport.lastContentUrl
         )
         assertEquals(false, transport.lastContentRequiresAuthorization)
+    }
+
+    @Test
+    fun downloadToWritesContentAndReportsProgress() = runBlocking {
+        val xml = """
+            <download-info>
+              <host>music.example</host>
+              <path>/path/file</path>
+              <ts>123</ts>
+              <s>abc</s>
+            </download-info>
+        """.trimIndent().toByteArray()
+        val transport = FakeTransport(
+            apiResult = YamResult.Success(
+                YamHttpResponse(
+                    200,
+                    """{"result":[{"codec":"mp3","bitrateInKbps":192,"gain":false,"preview":false,"downloadInfoUrl":"https://info.example/xml","direct":false}]}""",
+                ),
+            ),
+            contentResult = YamResult.Success(xml),
+        )
+        val output = ByteArrayOutputStream()
+        var reportedProgress: Pair<Long, Long?>? = null
+
+        val result = DownloadApi(transport, transport).downloadTo(
+            trackId = "10",
+            output = output,
+            onProgress = { downloaded, total ->
+                reportedProgress = downloaded to total
+            },
+        )
+
+        assertEquals(YamResult.Success(xml.size.toLong()), result)
+        assertTrue(output.toByteArray().contentEquals(xml))
+        assertEquals(xml.size.toLong() to xml.size.toLong(), reportedProgress)
+        assertEquals(2, transport.contentCalls)
     }
 
     @Test
