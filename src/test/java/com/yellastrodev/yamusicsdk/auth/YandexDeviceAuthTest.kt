@@ -101,6 +101,74 @@ class YandexDeviceAuthTest {
         )
     }
 
+    /** Проверяет восстановление polling после временного сетевого сбоя мобильного соединения. */
+    @Test
+    fun authorizeRetriesTransientNetworkErrorUntilTokenArrives() = runBlocking {
+        var requestNumber = 0
+        val transport = DeviceAuthTransport { _, _ ->
+            when (requestNumber++) {
+                0 -> deviceCodeResponse()
+                1 -> OAuthHttpResponse(
+                    400,
+                    """{"error":"authorization_pending"}""",
+                )
+                2 -> throw IOException("temporary timeout")
+                else -> OAuthHttpResponse(
+                    200,
+                    """
+                        {
+                          "access_token":"recovered_token",
+                          "refresh_token":"refresh",
+                          "expires_in":31536000,
+                          "token_type":"bearer"
+                        }
+                    """.trimIndent(),
+                )
+            }
+        }
+        var delayCount = 0
+        val auth = createAuth(
+            transport = transport,
+            delayMillis = { delayCount++ },
+        )
+
+        val result = auth.authorize(onCode = {})
+
+        assertTrue(result is DeviceAuthResult.Success)
+        assertEquals(
+            "recovered_token",
+            (result as DeviceAuthResult.Success).value.accessToken,
+        )
+        assertEquals(2, delayCount)
+        assertEquals(4, requestNumber)
+    }
+
+    /** Проверяет, что повтор сетевой ошибки ограничен сроком действия device code. */
+    @Test
+    fun authorizeStopsRetryingNetworkErrorAtDeadline() = runBlocking {
+        val times = ArrayDeque(listOf(0L, 2_000L))
+        var requestNumber = 0
+        val transport = DeviceAuthTransport { _, _ ->
+            if (requestNumber++ == 0) {
+                deviceCodeResponse(expiresIn = 1)
+            } else {
+                throw IOException("offline")
+            }
+        }
+        val auth = createAuth(
+            transport = transport,
+            nowMillis = { times.removeFirst() },
+        )
+
+        val result = auth.authorize(onCode = {})
+
+        assertEquals(
+            DeviceAuthResult.Failure(DeviceAuthError.Timeout(1)),
+            result,
+        )
+        assertEquals(2, requestNumber)
+    }
+
     @Test
     fun authorizeReturnsTypedTimeout() = runBlocking {
         val times = ArrayDeque(listOf(0L, 2_000L))

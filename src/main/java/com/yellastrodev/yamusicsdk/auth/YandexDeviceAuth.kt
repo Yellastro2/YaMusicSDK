@@ -177,6 +177,8 @@ class YandexDeviceAuth internal constructor(
 
     /**
      * Запрашивает код и опрашивает OAuth до подтверждения, таймаута или отмены.
+     * Временная сетевая ошибка отдельного poll-запроса не завершает Device Flow,
+     * пока выданный сервером код остаётся действительным.
      *
      * Отмена корутины распространяется как [CancellationException].
      */
@@ -212,7 +214,16 @@ class YandexDeviceAuth internal constructor(
                 is DeviceAuthResult.Success -> {
                     tokenResult.value?.let { return DeviceAuthResult.Success(it) }
                 }
-                is DeviceAuthResult.Failure -> return tokenResult
+                is DeviceAuthResult.Failure -> {
+                    if (tokenResult.error !is DeviceAuthError.Network) {
+                        return tokenResult
+                    }
+
+                    logger.warning(
+                        TAG,
+                        "[authorize] Временная ошибка сети при проверке подтверждения; повторяем polling",
+                    )
+                }
             }
 
             if (nowMillis() >= deadline) {

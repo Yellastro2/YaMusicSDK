@@ -33,6 +33,12 @@ internal class OkHttpDeviceAuthTransport(
 
     private val client = clients.regular
 
+    /**
+     * Выполняет один OAuth-запрос и удаляет его соединение из пула.
+     *
+     * Между poll-запросами проходит серверный интервал, поэтому отдельное соединение защищает
+     * Device Flow от повторного использования зависшего keep-alive на мобильной сети.
+     */
     override suspend fun postForm(
         url: String,
         fields: Map<String, String>
@@ -56,15 +62,19 @@ internal class OkHttpDeviceAuthTransport(
                 .header("X-Yandex-Music-Client", YANDEX_MUSIC_CLIENT)
                 .build()
 
-        client
-            .newCall(request)
-            .execute()
-            .use { response ->
-                OAuthHttpResponse(
-                    statusCode = response.code,
-                    body = response.body?.string().orEmpty(),
-                )
-            }
+        try {
+            client
+                .newCall(request)
+                .execute()
+                .use { response ->
+                    OAuthHttpResponse(
+                        statusCode = response.code,
+                        body = response.body?.string().orEmpty(),
+                    )
+                }
+        } finally {
+            client.connectionPool.evictAll()
+        }
     }
 
     override fun close() {
