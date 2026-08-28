@@ -25,6 +25,7 @@ import com.yellastrodev.yamusicsdk.playlists.PlaylistVisibility
 import com.yellastrodev.yamusicsdk.rotor.RotorApi
 import com.yellastrodev.yamusicsdk.rotor.RotorBatch
 import com.yellastrodev.yamusicsdk.rotor.RotorFeedbackType
+import com.yellastrodev.yamusicsdk.rotor.RotorStation
 import com.yellastrodev.yamusicsdk.search.SearchApi
 import com.yellastrodev.yamusicsdk.search.SearchResponse
 import com.yellastrodev.yamusicsdk.search.SearchSuggestions
@@ -241,6 +242,11 @@ class YamApiClient(
 
     suspend fun startWave(station: String): YamResult<RotorBatch> =
         rotorApi.tracks(station = station)
+
+    /** Возвращает полный список доступных пользователю Волн. */
+    suspend fun waveStations(
+        language: String = "ru"
+    ): YamResult<List<RotorStation>> = rotorApi.stations(language)
 
     suspend fun nextWaveTracks(
         station: String,

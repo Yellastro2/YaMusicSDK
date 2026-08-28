@@ -14,6 +14,17 @@ data class RotorBatch(
     val tracks: List<YaTrack>
 )
 
+/** Станция из полного каталога Rotor. */
+data class RotorStation(
+    val id: String,
+    val name: String,
+    val category: String,
+    val feedbackSource: String,
+    val coverUri: String? = null,
+    val customName: String? = null,
+    val description: String? = null
+)
+
 enum class RotorFeedbackType(internal val apiValue: String) {
     RADIO_STARTED("radioStarted"),
     TRACK_STARTED("trackStarted"),
@@ -29,14 +40,24 @@ internal data class RotorTracksPayload(
 
 @Serializable
 internal data class RotorStationResultPayload(
-    val station: RotorStationPayload
+    val station: RotorStationPayload? = null,
+    val customName: String? = null,
+    val rupDescription: String? = null
 )
 
 @Serializable
 internal data class RotorStationPayload(
     val id: RotorStationIdPayload,
+    val name: String = "",
     @SerialName("idForFrom")
-    val idForFrom: String
+    val idForFrom: String = "",
+    val fullImageUrl: String? = null,
+    val icon: RotorStationIconPayload? = null
+)
+
+@Serializable
+internal data class RotorStationIconPayload(
+    val imageUrl: String? = null
 )
 
 @Serializable

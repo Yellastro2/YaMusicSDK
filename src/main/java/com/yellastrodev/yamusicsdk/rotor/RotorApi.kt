@@ -21,6 +21,52 @@ internal class RotorApi(
         System.currentTimeMillis() / MILLIS_IN_SECOND
     }
 ) {
+    /** Возвращает полный каталог станций Rotor на выбранном языке. */
+    suspend fun stations(
+        language: String = "ru"
+    ): YamResult<List<RotorStation>> {
+        if (language.isBlank()) {
+            return invalidArguments("language не должен быть пустым")
+        }
+
+        return when (
+            val response = transport.execute(
+                YamHttpRequest(
+                    method = YamHttpMethod.GET,
+                    path = "/rotor/stations/list",
+                    query = mapOf("language" to language)
+                )
+            )
+        ) {
+            is YamResult.Success -> when (
+                val decoded = YamResponseDecoder.decodeResult(
+                    response.value,
+                    ListSerializer(RotorStationResultPayload.serializer())
+                )
+            ) {
+                is YamResult.Success -> YamResult.Success(
+                    decoded.value.mapNotNull { result ->
+                        val station = result.station ?: return@mapNotNull null
+                        RotorStation(
+                            id = station.id.value,
+                            name = station.name,
+                            category = station.id.type,
+                            feedbackSource = station.idForFrom,
+                            coverUri = station.fullImageUrl
+                                ?.takeIf { it.isNotBlank() }
+                                ?: station.icon?.imageUrl
+                                    ?.takeIf { it.isNotBlank() },
+                            customName = result.customName,
+                            description = result.rupDescription
+                        )
+                    }
+                )
+                is YamResult.Failure -> decoded
+            }
+            is YamResult.Failure -> response
+        }
+    }
+
     suspend fun tracks(
         station: String,
         queue: String? = null,
@@ -71,37 +117,20 @@ internal class RotorApi(
         if (station.isBlank() || language.isBlank()) {
             return invalidArguments("station и language не должны быть пустыми")
         }
-        return when (
-            val response = transport.execute(
-                YamHttpRequest(
-                    method = YamHttpMethod.GET,
-                    path = "/rotor/stations/list",
-                    query = mapOf("language" to language)
-                )
-            )
-        ) {
-            is YamResult.Success -> when (
-                val decoded = YamResponseDecoder.decodeResult(
-                    response.value,
-                    ListSerializer(RotorStationResultPayload.serializer())
-                )
-            ) {
-                is YamResult.Success -> {
-                    val source = decoded.value
-                        .firstOrNull { it.station.id.value == station }
-                        ?.station
-                        ?.idForFrom
-                    if (source.isNullOrBlank()) {
-                        invalidArguments(
-                            "Для станции $station отсутствует idForFrom"
-                        )
-                    } else {
-                        YamResult.Success(source)
-                    }
+        return when (val stationsResult = stations(language)) {
+            is YamResult.Success -> {
+                val source = stationsResult.value
+                    .firstOrNull { it.id == station }
+                    ?.feedbackSource
+                if (source.isNullOrBlank()) {
+                    invalidArguments(
+                        "Для станции $station отсутствует idForFrom"
+                    )
+                } else {
+                    YamResult.Success(source)
                 }
-                is YamResult.Failure -> decoded
             }
-            is YamResult.Failure -> response
+            is YamResult.Failure -> stationsResult
         }
     }
 

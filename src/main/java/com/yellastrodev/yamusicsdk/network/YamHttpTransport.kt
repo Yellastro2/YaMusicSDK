@@ -591,7 +591,7 @@ internal class YamHttpTransport(
         }
 
     private fun mapHttpError(statusCode: Int, body: String): YamError {
-        if (statusCode == HTTP_UNAUTHORIZED || statusCode == HTTP_FORBIDDEN) {
+        if (statusCode == HTTP_UNAUTHORIZED) {
             return YamError.Unauthorized
         }
 
@@ -634,7 +634,6 @@ internal class YamHttpTransport(
         const val YANDEX_MUSIC_CLIENT = "YandexMusicAndroid/24023621"
         const val NANOS_IN_MILLISECOND = 1_000_000L
         const val HTTP_UNAUTHORIZED = 401
-        const val HTTP_FORBIDDEN = 403
         const val MAX_REDIRECTS = 8
         const val CONTENT_BUFFER_SIZE = 64 * 1024
         val FORM_MEDIA_TYPE =

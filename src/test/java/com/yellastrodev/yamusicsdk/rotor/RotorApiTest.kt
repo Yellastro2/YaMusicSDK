@@ -16,6 +16,45 @@ import org.junit.Test
 class RotorApiTest {
 
     @Test
+    fun stationsDecodeCatalogAndUseRequestedLanguage() = runBlocking {
+        val transport = FakeTransport(
+            YamResult.Success(
+                YamHttpResponse(
+                    200,
+                    """
+                    {
+                      "result":[{
+                        "station":{
+                          "id":{"type":"activity","tag":"workout"},
+                          "idForFrom":"activity",
+                          "name":"Для тренировки",
+                          "fullImageUrl":"avatars.yandex.net/wave/%%"
+                        },
+                        "customName":"Тренируюсь",
+                        "rupDescription":"Больше энергии"
+                      }]
+                    }
+                    """.trimIndent()
+                )
+            )
+        )
+
+        val result = RotorApi(transport).stations("ru")
+
+        assertTrue(result is YamResult.Success)
+        val station = (result as YamResult.Success).value.single()
+        assertEquals("activity:workout", station.id)
+        assertEquals("Для тренировки", station.name)
+        assertEquals("activity", station.category)
+        assertEquals("activity", station.feedbackSource)
+        assertEquals("avatars.yandex.net/wave/%%", station.coverUri)
+        assertEquals("Тренируюсь", station.customName)
+        assertEquals("Больше энергии", station.description)
+        assertEquals("/rotor/stations/list", transport.lastRequest?.path)
+        assertEquals(mapOf("language" to "ru"), transport.lastRequest?.query)
+    }
+
+    @Test
     fun initialTracksUsesPythonSettingsAndDecodesBatch() = runBlocking {
         val transport = FakeTransport(tracksResponse())
 
