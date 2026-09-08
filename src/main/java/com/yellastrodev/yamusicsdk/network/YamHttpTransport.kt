@@ -1,6 +1,7 @@
 package com.yellastrodev.yamusicsdk.network
 
 import com.yellastrodev.yamusicsdk.YamLogger
+import com.yellastrodev.yamusicsdk.download.AudioRange
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
@@ -116,6 +117,22 @@ internal class YamHttpTransport(
     /** Освобождает connection pools и регистрацию SOCKS5-аутентификации. */
     override fun close() {
         clients.close()
+    }
+
+    /** Запрашивает диапазон без OAuth-заголовка, используя текущий ЯМ-прокси. */
+    suspend fun audioRange(
+        url: String,
+        start: Long,
+        length: Long,
+        onHeaders: (AudioRange) -> Unit,
+        onBytes: (Long, ByteArray, Int) -> Unit,
+    ): YamResult<Unit> {
+        require(start >= 0 && length > 0 && start <= Long.MAX_VALUE - length)
+        val request = buildContentRequest(url, "", false).newBuilder()
+            .header("Accept-Encoding", "identity")
+            .header("Range", "bytes=$start-${start + length - 1}")
+            .build()
+        return clients.regular.newCall(request).readAudioRange(start, length, onHeaders, onBytes)
     }
 
     override suspend fun execute(

@@ -8,6 +8,7 @@ import com.yellastrodev.yamusicsdk.artists.ArtistBriefInfo
 import com.yellastrodev.yamusicsdk.covers.CoverApi
 import com.yellastrodev.yamusicsdk.download.DownloadApi
 import com.yellastrodev.yamusicsdk.download.DownloadInfo
+import com.yellastrodev.yamusicsdk.download.AudioRange
 import com.yellastrodev.yamusicsdk.entities.CoverSize
 import com.yellastrodev.yamusicsdk.entities.YaLikeTracklist
 import com.yellastrodev.yamusicsdk.entities.YaAlbum
@@ -118,6 +119,19 @@ class YamApiClient(
 
     suspend fun accountStatus(): YamResult<AccountStatus> =
         accountApi.status()
+
+    /**
+     * Читает диапазон ранее полученного trackDownloadUrl через ЯМ-прокси.
+     * Колбэки вызываются последовательно на IO-потоке; buffer действителен только
+     * внутри onBytes. При ответе 200 onHeaders.offset=0, передаётся полный файл.
+     */
+    suspend fun audioRange(
+        url: String,
+        start: Long,
+        length: Long,
+        onHeaders: (AudioRange) -> Unit,
+        onBytes: (Long, ByteArray, Int) -> Unit,
+    ): YamResult<Unit> = httpTransport.audioRange(url, start, length, onHeaders, onBytes)
 
     suspend fun setTrackLiked(
         trackId: String,
