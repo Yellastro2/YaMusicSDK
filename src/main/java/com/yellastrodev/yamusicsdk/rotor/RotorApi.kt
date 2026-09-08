@@ -45,21 +45,28 @@ internal class RotorApi(
                 )
             ) {
                 is YamResult.Success -> YamResult.Success(
-                    decoded.value.mapNotNull { result ->
-                        val station = result.station ?: return@mapNotNull null
-                        RotorStation(
-                            id = station.id.value,
-                            name = station.name,
-                            category = station.id.type,
-                            feedbackSource = station.idForFrom,
-                            coverUri = station.fullImageUrl
-                                ?.takeIf { it.isNotBlank() }
-                                ?: station.icon?.imageUrl
-                                    ?.takeIf { it.isNotBlank() },
-                            customName = result.customName,
-                            description = result.rupDescription
-                        )
-                    }
+                    decoded.value.mapNotNull { it.toStation() }
+                )
+                is YamResult.Failure -> decoded
+            }
+            is YamResult.Failure -> response
+        }
+    }
+
+    /** Возвращает персональные рекомендации в порядке dashboard Яндекса. */
+    suspend fun recommendedStations(): YamResult<List<RotorStation>> {
+        return when (val response = transport.execute(
+            YamHttpRequest(
+                method = YamHttpMethod.GET,
+                path = "/rotor/stations/dashboard"
+            )
+        )) {
+            is YamResult.Success -> when (val decoded = YamResponseDecoder.decodeResult(
+                response.value,
+                RotorDashboardPayload.serializer()
+            )) {
+                is YamResult.Success -> YamResult.Success(
+                    decoded.value.stations.mapNotNull { it.toStation() }
                 )
                 is YamResult.Failure -> decoded
             }

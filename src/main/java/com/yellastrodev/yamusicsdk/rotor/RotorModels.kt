@@ -14,7 +14,7 @@ data class RotorBatch(
     val tracks: List<YaTrack>
 )
 
-/** Станция из полного каталога Rotor. */
+/** Станция из каталога или персональных рекомендаций Rotor. */
 data class RotorStation(
     val id: String,
     val name: String,
@@ -44,6 +44,26 @@ internal data class RotorStationResultPayload(
     val customName: String? = null,
     val rupDescription: String? = null
 )
+
+@Serializable
+internal data class RotorDashboardPayload(
+    val stations: List<RotorStationResultPayload> = emptyList()
+)
+
+/** Общая проекция станции для каталога и dashboard. */
+internal fun RotorStationResultPayload.toStation(): RotorStation? {
+    val value = station ?: return null
+    return RotorStation(
+        id = value.id.value,
+        name = value.name,
+        category = value.id.type,
+        feedbackSource = value.idForFrom,
+        coverUri = value.fullImageUrl?.takeIf { it.isNotBlank() }
+            ?: value.icon?.imageUrl?.takeIf { it.isNotBlank() },
+        customName = customName,
+        description = rupDescription
+    )
+}
 
 @Serializable
 internal data class RotorStationPayload(

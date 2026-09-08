@@ -248,6 +248,10 @@ class YamApiClient(
         language: String = "ru"
     ): YamResult<List<RotorStation>> = rotorApi.stations(language)
 
+    /** Возвращает рекомендованные текущему пользователю Волны. */
+    suspend fun recommendedWaveStations(): YamResult<List<RotorStation>> =
+        rotorApi.recommendedStations()
+
     suspend fun nextWaveTracks(
         station: String,
         previousTrackId: String

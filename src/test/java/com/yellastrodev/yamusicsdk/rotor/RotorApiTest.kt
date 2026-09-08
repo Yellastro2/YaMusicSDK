@@ -16,6 +16,32 @@ import org.junit.Test
 class RotorApiTest {
 
     @Test
+    fun dashboardDecodesNestedStationsInServerOrder() = runBlocking {
+        val transport = FakeTransport(
+            YamResult.Success(
+                YamHttpResponse(200, """
+                    {"result":{"dashboardId":"test","stations":[
+                      {"station":{"id":{"type":"activity","tag":"workout"},
+                        "name":"Тренируюсь","icon":{"imageUrl":"avatars.yandex.net/workout/%%"}}},
+                      {"station":null},
+                      {"station":{"id":{"type":"mood","tag":"calm"},"name":"Спокойная"}}
+                    ]}}
+                """.trimIndent())
+            )
+        )
+
+        val result = RotorApi(transport).recommendedStations()
+
+        assertTrue(result is YamResult.Success)
+        val stations = (result as YamResult.Success).value
+        assertEquals(listOf("activity:workout", "mood:calm"), stations.map { it.id })
+        assertEquals("avatars.yandex.net/workout/%%", stations.first().coverUri)
+        assertEquals(YamHttpMethod.GET, transport.lastRequest?.method)
+        assertEquals("/rotor/stations/dashboard", transport.lastRequest?.path)
+        assertTrue(transport.lastRequest?.query.orEmpty().isEmpty())
+    }
+
+    @Test
     fun stationsDecodeCatalogAndUseRequestedLanguage() = runBlocking {
         val transport = FakeTransport(
             YamResult.Success(
