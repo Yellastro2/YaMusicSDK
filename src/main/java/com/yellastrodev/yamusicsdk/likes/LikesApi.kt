@@ -8,6 +8,7 @@ import com.yellastrodev.yamusicsdk.network.YamHttpRequest
 import com.yellastrodev.yamusicsdk.network.YamResponseDecoder
 import com.yellastrodev.yamusicsdk.network.YamResult
 import com.yellastrodev.yamusicsdk.network.YamTransport
+import kotlinx.serialization.json.JsonObject
 
 internal class LikesApi(
     private val transport: YamTransport
@@ -51,27 +52,47 @@ internal class LikesApi(
         userId: String,
         trackId: String,
         liked: Boolean
+    ): YamResult<LikeActionResult> = trackAction(userId, trackId, "likes", liked)
+
+    /** «Не рекомендовать» также снимает лайк на стороне Яндекса. */
+    suspend fun dislikeTrack(
+        userId: String,
+        trackId: String,
+    ): YamResult<LikeActionResult> = trackAction(userId, trackId, "dislikes", true)
+
+    private suspend fun trackAction(
+        userId: String,
+        trackId: String,
+        collection: String,
+        add: Boolean,
     ): YamResult<LikeActionResult> {
         if (userId.isBlank() || trackId.isBlank()) {
             return invalidArguments("userId и trackId не должны быть пустыми")
         }
 
-        val action = if (liked) "add-multiple" else "remove"
+        val action = if (add) "add-multiple" else "remove"
         return when (
             val response = transport.execute(
                 YamHttpRequest(
                     method = YamHttpMethod.POST,
-                    path = "/users/$userId/likes/tracks/$action",
+                    path = "/users/$userId/$collection/tracks/$action",
                     body = YamHttpBody.Form(
                         mapOf("track-ids" to trackId)
                     )
                 )
             )
         ) {
-            is YamResult.Success -> YamResponseDecoder.decodeResult(
+            is YamResult.Success -> when (val body = YamResponseDecoder.decodeBody(
                 response = response.value,
-                resultSerializer = LikeActionResult.serializer()
-            )
+                serializer = JsonObject.serializer(),
+            )) {
+                is YamResult.Success -> YamResponseDecoder.decodeElement(
+                    // Python Request accepts both a result envelope and a bare revision.
+                    element = body.value["result"] ?: body.value,
+                    serializer = LikeActionResult.serializer(),
+                )
+                is YamResult.Failure -> body
+            }
             is YamResult.Failure -> response
         }
     }

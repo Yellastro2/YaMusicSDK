@@ -107,6 +107,7 @@ internal class YamConnectionFactory(
         }
     }
 
+    /** Создаёт клиент с безопасной диагностикой этапов каждого сетевого вызова. */
     private fun createClient(
         connectTimeoutMillis: Int,
         readTimeoutMillis: Int,
@@ -114,6 +115,7 @@ internal class YamConnectionFactory(
     ): OkHttpClient {
         val builder =
             OkHttpClient.Builder()
+                .eventListenerFactory { YamNetworkDiagnostics(logger) }
                 .connectTimeout(
                     connectTimeoutMillis.toLong(),
                     TimeUnit.MILLISECONDS,

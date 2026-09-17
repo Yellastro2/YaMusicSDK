@@ -145,15 +145,68 @@ class LikesApiTest {
         assertNull(transport.lastRequest)
     }
 
+    @Test
+    fun dislikeUsesDislikesEndpointAndDecodesRevision() = runBlocking {
+        val transport = FakeTransport(
+            YamResult.Success(YamHttpResponse(200, """{"result":{"revision":44}}"""))
+        )
+
+        val result = LikesApi(transport).dislikeTrack("100", "200")
+
+        assertEquals(YamResult.Success(LikeActionResult(revision = 44)), result)
+        assertEquals(YamHttpMethod.POST, transport.lastRequest?.method)
+        assertEquals("/users/100/dislikes/tracks/add-multiple", transport.lastRequest?.path)
+        assertEquals(YamHttpBody.Form(mapOf("track-ids" to "200")), transport.lastRequest?.body)
+        // The dislikes endpoint also removes the like; no separate likes mutation is needed.
+        assertEquals(1, transport.requestCount)
+    }
+
+    @Test
+    fun dislikeAcceptsBareRevisionLikePythonRequest() = runBlocking {
+        val transport = FakeTransport(
+            YamResult.Success(YamHttpResponse(200, """{"revision":45}"""))
+        )
+        assertEquals(
+            YamResult.Success(LikeActionResult(revision = 45)),
+            LikesApi(transport).dislikeTrack("100", "200"),
+        )
+    }
+
+    @Test
+    fun dislikeRejectsBlankIdsWithoutRequest() = runBlocking {
+        val transport = FakeTransport(
+            YamResult.Success(YamHttpResponse(200, """{"revision":44}"""))
+        )
+        for ((userId, trackId) in listOf(" " to "200", "100" to " ")) {
+            val result = LikesApi(transport).dislikeTrack(userId, trackId)
+            assertTrue(result is YamResult.Failure)
+        }
+        assertEquals(0, transport.requestCount)
+    }
+
+    @Test
+    fun dislikePreservesTransportFailureAndRejectsMissingRevision() = runBlocking {
+        val failure = YamResult.Failure(YamError.Timeout)
+        assertEquals(failure, LikesApi(FakeTransport(failure)).dislikeTrack("100", "200"))
+
+        val result = LikesApi(FakeTransport(
+            YamResult.Success(YamHttpResponse(200, """{"result":{}}"""))
+        )).dislikeTrack("100", "200")
+        assertTrue(result is YamResult.Failure)
+        assertTrue((result as YamResult.Failure).error is YamError.InvalidResponse)
+    }
+
     private class FakeTransport(
         private val result: YamResult<YamHttpResponse>
     ) : YamTransport {
         var lastRequest: YamHttpRequest? = null
+        var requestCount = 0
 
         override suspend fun execute(
             request: YamHttpRequest
         ): YamResult<YamHttpResponse> {
             lastRequest = request
+            requestCount++
             return result
         }
     }

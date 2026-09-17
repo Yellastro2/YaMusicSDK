@@ -43,6 +43,26 @@ gradle build
 - **Обложки** — загрузка изображения обложки нужного размера.
 - **Телеметрия прослушивания** — `/play-audio`: начало и завершение прослушивания, позиции, длительность, `playId`, контекст плейлиста и другие параметры.
 
+## Лендинг и плейлист дня
+
+```kotlin
+val landing = client.landing(listOf("personalplaylists", "new-releases", "chart"))
+val personal = client.personalPlaylists()
+val daily = client.playlistOfTheDay()
+```
+
+Все методы возвращают `YamResult`. `landing` содержит блоки и карточки с исходным
+`JsonElement` в `data`, чтобы сохранять неизвестные форматы. `personalPlaylists`
+разбирает персональные карточки в `GeneratedPlaylist` с `ready` и краткой моделью
+`LandingPlaylist`. `playlistOfTheDay` дополнительно загружает полный `PlaylistDetails`
+по UID и kind из карточки. `Success(null)` означает отсутствие готового плейлиста дня;
+ошибки сети и формата возвращаются как `Failure`.
+
+Другие блоки: `promotions`, `new-playlists`, `mixes`, `artists`, `albums`, `playlists`,
+`play_contexts`, `podcasts`. Их наполнение зависит от сервера и аккаунта; отдельные
+типизированные модели этих карточек пока не реализованы. Запросы используют общий
+OAuth-транспорт и настройки прокси. Проверка живого ответа аккаунта ещё требуется.
+
 ## Авторизация
 
 Для авторизации доступен OAuth Device Flow:
@@ -121,7 +141,14 @@ val update = client.setTrackLiked(
 )
 
 val likedTracks = client.likedTracks()
+
+// «Не рекомендовать»: ставит дизлайк и снимает существующий лайк на сервере.
+val dislike = client.dislikeTrack(trackId = trackId)
 ```
+
+`dislikeTrack` вызывает `POST /users/{userId}/dislikes/tracks/add-multiple`
+с полем формы `track-ids` и возвращает `YamResult<LikeActionResult>` с ревизией.
+Для обычного снятия лайка используйте `setTrackLiked(trackId, liked = false)`.
 
 ## Плейлисты
 

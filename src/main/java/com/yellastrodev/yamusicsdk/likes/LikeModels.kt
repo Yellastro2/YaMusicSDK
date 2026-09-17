@@ -4,7 +4,7 @@ import com.yellastrodev.yamusicsdk.entities.YaLikeTracklist
 import kotlinx.serialization.Serializable
 
 /**
- * Новая ревизия списка любимых треков после добавления или удаления лайка.
+ * Новая ревизия списка после изменения лайка или постановки «Не рекомендовать».
  */
 @Serializable
 data class LikeActionResult(

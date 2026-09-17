@@ -79,13 +79,14 @@ internal fun interface YamContentTransport {
 }
 
 /**
- * Внутренний OkHttp transport. Логирует только метод, путь, статус и время без тела и токена.
+ * Внутренний OkHttp transport: подключение до 3с, отсутствие данных до 5с.
+ * Логирует только метод, путь, статус и время без тела и токена.
  */
 internal class YamHttpTransport(
     private val accessToken: () -> String,
     private val baseUrl: String = DEFAULT_BASE_URL,
-    private val connectTimeoutMillis: Int = 10_000,
-    private val readTimeoutMillis: Int = 15_000,
+    private val connectTimeoutMillis: Int = 3_000,
+    private val readTimeoutMillis: Int = 5_000,
     connectionFactory: YamConnectionFactory = YamConnectionFactory(),
     private val logger: YamLogger
 ) : YamTransport, YamContentTransport, AutoCloseable {

@@ -34,11 +34,14 @@ import com.yellastrodev.yamusicsdk.search.SearchType
 import com.yellastrodev.yamusicsdk.tracks.TrackApi
 import com.yellastrodev.yamusicsdk.tracks.PlayAudioRequest
 import java.io.OutputStream
+import com.yellastrodev.yamusicsdk.landing.LandingApi
+import com.yellastrodev.yamusicsdk.landing.LandingResponse
+import com.yellastrodev.yamusicsdk.landing.GeneratedPlaylist
 
 /**
  * Корутино-ориентированный клиент API Яндекс Музыки для Kotlin/JVM.
  *
- * Публичные сетевые операции возвращают [YamResult] и не отдают JSON наружу.
+ * Публичные сетевые операции возвращают [YamResult]. Лендинг сохраняет разнородные карточки как JSON.
  */
 class YamApiClient(
     accessToken: String,
@@ -74,6 +77,7 @@ class YamApiClient(
     private val artistApi by lazy { ArtistApi(httpTransport) }
     private val likesApi by lazy { LikesApi(httpTransport) }
     private val playlistApi by lazy { PlaylistApi(httpTransport) }
+    private val landingApi by lazy { LandingApi(httpTransport) }
     private val trackApi by lazy { TrackApi(httpTransport) }
     private val searchApi by lazy { SearchApi(httpTransport) }
     private val rotorApi by lazy { RotorApi(httpTransport) }
@@ -143,6 +147,12 @@ class YamApiClient(
         liked = liked
     )
 
+    /** Ставит «Не рекомендовать» и снимает существующий лайк на стороне Яндекса. */
+    suspend fun dislikeTrack(
+        trackId: String,
+        userId: String = this.userId,
+    ): YamResult<LikeActionResult> = likesApi.dislikeTrack(userId, trackId)
+
     suspend fun likedTracks(
         ifModifiedSinceRevision: Int = 0,
         userId: String = this.userId
@@ -150,6 +160,17 @@ class YamApiClient(
         userId = userId,
         ifModifiedSinceRevision = ifModifiedSinceRevision
     )
+
+    /** Получает выбранные блоки главной страницы с исходным содержимым карточек. */
+    suspend fun landing(
+        blocks: List<String> = listOf("personalplaylists"),
+    ): YamResult<LandingResponse> = landingApi.landing(blocks)
+
+    /** Возвращает персональные подборки, включая ещё не готовые. */
+    suspend fun personalPlaylists(): YamResult<List<GeneratedPlaylist>> = landingApi.personalPlaylists()
+
+    /** Загружает плейлист дня с треками; Success(null) означает отсутствие готовой подборки. */
+    suspend fun playlistOfTheDay(): YamResult<PlaylistDetails?> = landingApi.playlistOfTheDay()
 
     suspend fun playlist(
         kind: Int,
